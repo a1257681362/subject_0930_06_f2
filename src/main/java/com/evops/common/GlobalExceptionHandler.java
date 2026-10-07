@@ -5,9 +5,16 @@ import org.springframework.validation.FieldError;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import com.evops.exception.RouteValidationException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(RouteValidationException.class)
+    public ApiResponse<com.evops.entity.RoutePublishCheck> handleRouteValidation(RouteValidationException ex) {
+        // 校验记录已落库可追溯，随响应返回禁飞区冲突坐标与原因
+        return ApiResponse.fail(ex.getMessage(), ex.getCheck());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ApiResponse<Void> handleIllegalArgument(IllegalArgumentException ex) {
         return ApiResponse.fail(ex.getMessage());

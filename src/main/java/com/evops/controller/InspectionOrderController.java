@@ -6,7 +6,9 @@ import com.evops.dto.InspectSubmitRequest;
 import com.evops.dto.OrderCreateRequest;
 import com.evops.entity.Defect;
 import com.evops.entity.InspectionOrder;
+import com.evops.service.FlightRouteService;
 import com.evops.service.InspectionService;
+import com.evops.service.RouteApprovalService;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,9 +25,15 @@ import java.util.Map;
 public class InspectionOrderController {
 
     private final InspectionService inspectionService;
+    private final FlightRouteService flightRouteService;
+    private final RouteApprovalService routeApprovalService;
 
-    public InspectionOrderController(InspectionService inspectionService) {
+    public InspectionOrderController(InspectionService inspectionService,
+                                     FlightRouteService flightRouteService,
+                                     RouteApprovalService routeApprovalService) {
         this.inspectionService = inspectionService;
+        this.flightRouteService = flightRouteService;
+        this.routeApprovalService = routeApprovalService;
     }
 
     /** 创建巡检工单 */
@@ -54,12 +62,20 @@ public class InspectionOrderController {
         return ApiResponse.ok(inspectionService.close(id));
     }
 
-    /** 工单详情（含缺陷列表） */
+    /** 工单详情（含缺陷列表、飞行时引用的航线版本与改线审批，历史影像可追溯原航线） */
     @GetMapping("/{id}")
     public ApiResponse<Map<String, Object>> detail(@PathVariable Long id) {
         Map<String, Object> result = new HashMap<>();
-        result.put("order", inspectionService.mustGetOrder(id));
+        InspectionOrder order = inspectionService.mustGetOrder(id);
+        result.put("order", order);
         result.put("defects", inspectionService.listDefects(id));
+        if (order.getRouteVersionId() != null) {
+            result.put("routeVersion", flightRouteService.mustGetVersion(order.getRouteVersionId()));
+        }
+        if (order.getRouteChangeApplyId() != null) {
+            result.put("routeChangeApproval",
+                    routeApprovalService.mustGet(order.getRouteChangeApplyId()));
+        }
         return ApiResponse.ok(result);
     }
 }

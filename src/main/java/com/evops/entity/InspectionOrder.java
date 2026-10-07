@@ -22,5 +22,11 @@ public class InspectionOrder extends BaseEntity {
     private LocalDateTime inspectTime;
     /** 无人机影像地址 */
     private String droneImageUrl;
+    /** 飞行时引用的航线版本（影像提交后冻结，历史影像永远可追溯原航线） */
+    private Long routeVersionId;
+    /** 关联的飞行任务 */
+    private Long routeMissionId;
+    /** 临时改线审批单（该工单按改线版本飞行时记录） */
+    private Long routeChangeApplyId;
     private OrderStatus status;
 }

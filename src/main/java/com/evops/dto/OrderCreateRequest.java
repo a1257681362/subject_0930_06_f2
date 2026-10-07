@@ -13,4 +13,6 @@ public class OrderCreateRequest {
     private Long turbineId;
     /** 指定单叶片巡检；为空表示整机巡检 */
     private Long bladeId;
+    /** 关联飞行任务：工单继承其已冻结的航线版本与临时改线审批，历史影像可追溯原航线 */
+    private Long missionId;
 }

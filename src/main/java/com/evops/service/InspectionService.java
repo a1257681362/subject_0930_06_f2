@@ -9,8 +9,10 @@ import com.evops.dto.OrderCreateRequest;
 import com.evops.dto.RepairRequest;
 import com.evops.entity.Blade;
 import com.evops.entity.Defect;
+import com.evops.entity.FlightMission;
 import com.evops.entity.InspectionOrder;
 import com.evops.enums.DefectStatus;
+import com.evops.enums.MissionStatus;
 import com.evops.enums.OrderStatus;
 import com.evops.mapper.DefectMapper;
 import com.evops.mapper.InspectionOrderMapper;
@@ -27,12 +29,17 @@ public class InspectionService extends ServiceImpl<InspectionOrderMapper, Inspec
     private final TurbineService turbineService;
     private final BladeService bladeService;
     private final DefectMapper defectMapper;
+    private final FlightMissionService missionService;
+    private final RouteApprovalService routeApprovalService;
 
     public InspectionService(TurbineService turbineService, BladeService bladeService,
-                             DefectMapper defectMapper) {
+                             DefectMapper defectMapper, FlightMissionService missionService,
+                             RouteApprovalService routeApprovalService) {
         this.turbineService = turbineService;
         this.bladeService = bladeService;
         this.defectMapper = defectMapper;
+        this.missionService = missionService;
+        this.routeApprovalService = routeApprovalService;
     }
 
     /** 创建巡检工单 */
@@ -44,6 +51,19 @@ public class InspectionService extends ServiceImpl<InspectionOrderMapper, Inspec
                 throw new IllegalArgumentException("叶片不属于该风机: " + req.getBladeId());
             }
         }
+
+        FlightMission mission = null;
+        if (req.getMissionId() != null) {
+            mission = missionService.mustGet(req.getMissionId());
+            if (!mission.getTurbineId().equals(req.getTurbineId())) {
+                throw new IllegalArgumentException("飞行任务不属于该风机: " + req.getMissionId());
+            }
+            // 必须已起飞：此时航线版本已冻结，工单影像引用飞行时的原航线版本
+            if (mission.getStatus() == MissionStatus.PENDING || mission.getStatus() == MissionStatus.CANCELLED) {
+                throw new IllegalArgumentException("飞行任务尚未起飞，不能关联巡检工单: " + mission.getStatus());
+            }
+        }
+
         String orderNo = StringUtils.hasText(req.getOrderNo())
                 ? req.getOrderNo()
                 : "IO" + System.currentTimeMillis();
@@ -56,6 +76,14 @@ public class InspectionService extends ServiceImpl<InspectionOrderMapper, Inspec
         order.setOrderNo(orderNo);
         order.setTurbineId(req.getTurbineId());
         order.setBladeId(req.getBladeId());
+        if (mission != null) {
+            order.setRouteMissionId(mission.getId());
+            // 继承起飞时冻结的版本；后续航线再发新版本也不改变，历史影像引用原航线
+            order.setRouteVersionId(mission.getRouteVersionId());
+            // 若该版本来自已通过的临时改线，留审批单号，影像可追溯改线依据
+            order.setRouteChangeApplyId(
+                    routeApprovalService.findApprovedChangeApplyId(mission.getRouteVersionId()));
+        }
         order.setStatus(OrderStatus.PENDING);
         save(order);
         return order;
