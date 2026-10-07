@@ -9,9 +9,11 @@ import com.evops.dto.OrderCreateRequest;
 import com.evops.dto.RepairRequest;
 import com.evops.entity.Blade;
 import com.evops.entity.Defect;
+import com.evops.entity.FlightTask;
 import com.evops.entity.InspectionOrder;
 import com.evops.enums.DefectStatus;
 import com.evops.enums.OrderStatus;
+import com.evops.enums.TaskStatus;
 import com.evops.mapper.DefectMapper;
 import com.evops.mapper.InspectionOrderMapper;
 import org.springframework.stereotype.Service;
@@ -27,12 +29,14 @@ public class InspectionService extends ServiceImpl<InspectionOrderMapper, Inspec
     private final TurbineService turbineService;
     private final BladeService bladeService;
     private final DefectMapper defectMapper;
+    private final FlightTaskService flightTaskService;
 
     public InspectionService(TurbineService turbineService, BladeService bladeService,
-                             DefectMapper defectMapper) {
+                             DefectMapper defectMapper, FlightTaskService flightTaskService) {
         this.turbineService = turbineService;
         this.bladeService = bladeService;
         this.defectMapper = defectMapper;
+        this.flightTaskService = flightTaskService;
     }
 
     /** 创建巡检工单 */
@@ -56,6 +60,20 @@ public class InspectionService extends ServiceImpl<InspectionOrderMapper, Inspec
         order.setOrderNo(orderNo);
         order.setTurbineId(req.getTurbineId());
         order.setBladeId(req.getBladeId());
+        // 关联飞行任务：带出拍摄时绑定的航线版本，历史影像始终引用原航线版本
+        if (req.getFlightTaskId() != null) {
+            FlightTask task = flightTaskService.mustGet(req.getFlightTaskId());
+            if (!task.getTurbineId().equals(req.getTurbineId())) {
+                throw new IllegalArgumentException("飞行任务与工单风机不一致: " + req.getFlightTaskId());
+            }
+            if (task.getStatus() == TaskStatus.PLANNED || task.getStatus() == TaskStatus.CANCELLED) {
+                throw new IllegalArgumentException("飞行任务尚未起飞，不能关联巡检工单: " + req.getFlightTaskId());
+            }
+            order.setFlightTaskId(task.getId());
+            order.setRouteVersionId(task.getRouteVersionId());
+        } else if (req.getRouteVersionId() != null) {
+            order.setRouteVersionId(req.getRouteVersionId());
+        }
         order.setStatus(OrderStatus.PENDING);
         save(order);
         return order;

@@ -57,3 +57,58 @@ POST   /api/defects/{id}/accept               验收（pass=true 闭环 / false 
 
 - `mvn test`：`BladeLedgerFlowTest`（全流程、编号互斥、换件前后关系、状态机）+ `BoundaryAttributionTest`（把风机档案调到临界时间后，叶片档案按同一左闭右开口径归属）。
 - 测试使用 H2 内存库（`src/test/resources/application.yml`），不污染 `data/` 本地文件库。
+
+## F2 无人机叶片巡检航线
+
+在 F1 基础上新增无人机叶片巡检航线（schema 版本 `f2-1`）：航线按 风机+叶片方位+拍摄距离 配置，内容版本化发布；发布前校验临时禁飞区、风速条件、电量余量；临时改线走两级审批并留版本差异。
+
+### 数据表
+
+| 表 | 说明 |
+| --- | --- |
+| `t_flight_route` | 航线：风机+叶片方位+拍摄距离唯一组合，指向当前发布版本 |
+| `t_flight_route_version` | 航线版本：航点串、预计航程、耗电与风速限值、校验留痕；状态 `DRAFT/PUBLISHED/RETIRED` |
+| `t_no_fly_zone` | 禁飞区：临时/永久，多边形+限飞高度+生效窗口 `[effective_from, effective_to)`；只取消不删除 |
+| `t_flight_task` | 飞行任务：创建时绑定当前发布版本；状态 `PLANNED/TAKEN_OFF/COMPLETED/CANCELLED` |
+| `t_route_change_request` | 临时改线申请：基准版本、拟改航点、版本差异 JSON；状态 `PENDING/APPROVED/REJECTED` |
+| `t_route_change_approval` | 改线审批记录：每级一条（change_id + step_no 唯一） |
+| `t_audit_event` | 审计事件：航线规划与禁飞区关键动作留痕 |
+| `t_inspection_order` | 新增 `flight_task_id`、`route_version_id`：历史影像始终引用拍摄时的原航线版本 |
+
+### 业务规则
+
+- **航线配置**：一条航线 = 风机 + 叶片方位（A/B/C）+ 拍摄距离 的唯一组合；航线内容版本化，版本号航线内递增。
+- **发布前校验**（`RouteCheckService`）：① 逐航点核对当前生效的临时/永久禁飞区（射线法 + 限飞高度），冲突给出**航点坐标、命中区域和原因**；② 当前风速不得超过航线限值；③ 当前电量 − 预计耗电 不得低于安全余量 20%。校验不过发布被拦，冲突明细随响应返回。
+- **版本作用域**：新版本发布只改绑未起飞（`PLANNED`）任务；已起飞任务版本锁定。巡检工单关联飞行任务时带出任务绑定的航线版本，历史影像不随新版本发布改变引用；旧版本退役但保留，航点级内容可查。
+- **临时改线**：基于基准版本发起申请，自动留存版本差异（added/removed/moved/paramChanges）。**两级审批**（1 场站 → 2 运检中心）：只完成一半时保持 `PENDING` 停留待处理，不生成新版本；任一级驳回即结案；终审先对拟改内容做发布前校验，通过才落审批记录、生成新版本并发布——校验被拦时申请仍停留待处理，条件解除后可重新终审。
+- **可追溯**：航线创建/版本发布/任务改绑/改线审批/禁飞区划定与取消均写入 `t_audit_event`；禁飞区只取消不删除，全量（含已取消、已过期）可查。
+
+### 接口一览
+
+```
+POST   /api/routes                            新建航线（含首版本草稿）
+GET    /api/routes/{id}                       航线详情（含全部版本）
+GET    /api/routes/by-turbine/{turbineId}     风机航线列表
+POST   /api/routes/{id}/versions              新增版本草稿
+GET    /api/routes/versions/{vid}             版本详情（含航点串，历史版本可查）
+POST   /api/routes/versions/{vid}/check       发布前校验（试算，返回冲突明细）
+POST   /api/routes/versions/{vid}/publish     发布（校验通过才生效，未起飞任务改绑）
+POST   /api/no-fly-zones                      划设禁飞区（临时/永久）
+GET    /api/no-fly-zones                      全量列表（?activeOnly=true 只看当前生效）
+POST   /api/no-fly-zones/{id}/cancel          取消（不删除，保留追溯）
+POST   /api/flight-tasks                      创建飞行任务（绑定当前发布版本）
+POST   /api/flight-tasks/{id}/takeoff         起飞（版本自此锁定）
+POST   /api/flight-tasks/{id}/complete        完成
+POST   /api/flight-tasks/{id}/cancel          取消（仅未起飞）
+POST   /api/route-changes                     临时改线申请（留版本差异）
+POST   /api/route-changes/{id}/approve        审批当前级次（两级；半批停留待处理）
+GET    /api/route-changes/{id}                详情（拟改航点+版本差异+审批记录）
+GET    /api/audit-events                      追溯查询（entityType + entityId）
+```
+
+巡检工单创建（`POST /api/inspection-orders`）新增可选字段 `flightTaskId`（任务须已起飞，自动带出航线版本）与 `routeVersionId`。
+
+### 验证
+
+- `FlightRouteFlowTest`：航线配置与发布、禁飞区冲突坐标与原因、风速/电量校验、禁飞区生效窗口、新版本只作用未起飞任务、历史影像引用原航线。
+- `RouteChangeApprovalTest`：两级审批半批停留待处理、版本差异留存、任一级驳回结案、终审遇禁飞区被拦后停留待处理并可重试、航线与禁飞区审计追溯、历史版本退役后航点可查。
